@@ -2,6 +2,7 @@
 
 Enterprise-style AI pricing optimization platform built using Python, FastAPI, Google Cloud, BigQuery, and Vertex AI.
 
+<img width="1194" height="1317" alt="ChatGPT Image May 20, 2026, 10_21_43 PM" src="https://github.com/user-attachments/assets/c18e897d-c37f-4bbe-99b8-cde64d5d6ffb" />
 
 ## Core Capabilities
 
