@@ -2,6 +2,7 @@
 
 Enterprise-style AI pricing optimization platform built using Python, FastAPI, Google Cloud, BigQuery, and Vertex AI.
 
+
 ## Core Capabilities
 
 - Dynamic price optimization
