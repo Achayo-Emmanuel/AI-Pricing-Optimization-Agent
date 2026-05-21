@@ -1,0 +1,346 @@
+{
+  "components": {
+    "comp-decide": {
+      "executorLabel": "exec-decide",
+      "inputDefinitions": {
+        "parameters": {
+          "mae": {
+            "parameterType": "NUMBER_DOUBLE"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "parameters": {
+          "Output": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-deploy-model": {
+      "executorLabel": "exec-deploy-model",
+      "inputDefinitions": {
+        "artifacts": {
+          "model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "decision": {
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "parameters": {
+          "Output": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-evaluate-model": {
+      "executorLabel": "exec-evaluate-model",
+      "inputDefinitions": {
+        "artifacts": {
+          "dataset": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          },
+          "model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      },
+      "outputDefinitions": {
+        "parameters": {
+          "Output": {
+            "parameterType": "NUMBER_DOUBLE"
+          }
+        }
+      }
+    },
+    "comp-load-data": {
+      "executorLabel": "exec-load-data",
+      "outputDefinitions": {
+        "artifacts": {
+          "dataset": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      }
+    },
+    "comp-train-model": {
+      "executorLabel": "exec-train-model",
+      "inputDefinitions": {
+        "artifacts": {
+          "dataset": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      }
+    }
+  },
+  "deploymentSpec": {
+    "executors": {
+      "exec-decide": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "decide"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef decide(mae: float) -> str:\n    threshold = 50\n\n    if mae < threshold:\n        return \"DEPLOY\"\n    else:\n        return \"KEEP_OLD\"\n\n"
+          ],
+          "image": "python:3.11"
+        }
+      },
+      "exec-deploy-model": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "deploy_model"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-storage' 'google-cloud-aiplatform'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef deploy_model(\n    model: Input[Model],\n    decision: str\n) -> str:\n\n    from google.cloud import storage, aiplatform\n    from datetime import datetime\n\n    if decision != \"DEPLOY\":\n        return \"Model not deployed\"\n\n    PROJECT_ID = \"pricing-optimization-agent\"\n    REGION = \"us-central1\"\n    BUCKET = \"pricing-models-bucket\"\n\n    aiplatform.init(\n        project=PROJECT_ID,\n        location=REGION\n    )\n\n    version = f\"model_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}\"\n\n    # upload model artifact to GCS\n    storage_client = storage.Client()\n\n    bucket = storage_client.bucket(BUCKET)\n\n    blob_path = f\"models/{version}/model.pkl\"\n\n    blob = bucket.blob(blob_path)\n\n    blob.upload_from_filename(model.path)\n\n    gcs_uri = f\"gs://{BUCKET}/models/{version}\"\n\n    # register model in Vertex AI\n    vertex_model = aiplatform.Model.upload(\n        display_name=version,\n        artifact_uri=gcs_uri,\n        serving_container_image_uri=\"us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-5:latest\"\n    )\n\n    # create endpoint\n    endpoint = aiplatform.Endpoint.create(\n        display_name=\"pricing-endpoint\"\n    )\n\n    # deploy model to endpoint\n    vertex_model.deploy(\n        endpoint=endpoint,\n        machine_type=\"n1-standard-2\"\n    )\n\n    return f\"Model deployed to endpoint: {endpoint.resource_name}\"\n\n"
+          ],
+          "image": "python:3.11"
+        }
+      },
+      "exec-evaluate-model": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "evaluate_model"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'pandas==2.2.2' 'numpy==1.26.4' 'scikit-learn==1.4.2'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef evaluate_model(\n    dataset: Input[Dataset],\n    model: Input[Model]\n    ) -> float:\n\n    import pandas as pd\n    import pickle\n    from sklearn.metrics import mean_absolute_error\n\n    df = pd.read_csv(dataset.path)\n\n    df.columns = df.columns.str.lower()\n\n    features = [\n        \"avg_price\",\n        \"lag_1_units\",\n        \"lag_2_units\",\n        \"rolling_4_wk_units\",\n        \"rolling_4_wk_price\"\n    ]\n\n    target = \"units_sold\"\n\n    df = df[features + [target]].dropna()\n    df = df.astype(float)\n\n    X = df[features]\n    y = df[target]\n\n    with open(model.path, \"rb\") as f:\n        model = pickle.load(f)\n\n    preds = model.predict(X)\n\n    mae = mean_absolute_error(y, preds)\n\n    return mae\n\n"
+          ],
+          "image": "python:3.11"
+        }
+      },
+      "exec-load-data": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "load_data"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef load_data(dataset: Output[Dataset]):\n\n    from google.cloud import bigquery\n    import csv\n\n    client = bigquery.Client(project=\"pricing-optimization-agent\")\n\n    query = \"\"\"\n    SELECT\n        avg_price,\n        lag_1_units,\n        lag_2_units,\n        rolling_4_wk_units,\n        rolling_4_wk_price,\n        units_sold\n    FROM `pricing-optimization-agent.pricing_agent_dev.model_dataset`\n    \"\"\"\n\n    results = client.query(query).result()\n\n    with open(dataset.path, \"w\", newline=\"\") as csvfile:\n\n        writer = None\n\n        for row in results:\n\n            if writer is None:\n                writer = csv.DictWriter(csvfile, fieldnames=row.keys())\n                writer.writeheader()\n\n            writer.writerow(dict(row))\n\n"
+          ],
+          "image": "python:3.11"
+        }
+      },
+      "exec-train-model": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "train_model"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'pandas==2.2.2' 'numpy==1.26.4' 'scikit-learn==1.4.2'  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef train_model(\n    dataset: Input[Dataset],\n    model: Output[Model]\n    ):\n\n    import pandas as pd\n    import pickle\n    from sklearn.ensemble import RandomForestRegressor\n\n    df = pd.read_csv(dataset.path)\n\n    df.columns = df.columns.str.lower()\n\n    print(\"COLUMNS:\")\n    print(df.columns.tolist())\n\n\n    features = [\n        \"avg_price\",\n        \"lag_1_units\",\n        \"lag_2_units\",\n        \"rolling_4_wk_units\",\n        \"rolling_4_wk_price\"\n    ]\n\n    target = \"units_sold\"\n\n    # keep only required columns\n    df = df[features + [target]].dropna()\n    df = df.astype(float)\n\n    print(df.head())\n    print(df.columns.tolist())\n\n    X = df[features]\n    y = df[target]\n\n    rf_model = RandomForestRegressor(\n        n_estimators=100,\n        random_state=42\n    )\n\n    rf_model.fit(X, y)\n\n    with open(model.path, \"wb\") as f:\n     pickle.dump(rf_model, f)\n\n"
+          ],
+          "image": "python:3.11"
+        }
+      }
+    }
+  },
+  "pipelineInfo": {
+    "name": "pricing-retraining-pipeline"
+  },
+  "root": {
+    "dag": {
+      "tasks": {
+        "decide": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-decide"
+          },
+          "dependentTasks": [
+            "evaluate-model"
+          ],
+          "inputs": {
+            "parameters": {
+              "mae": {
+                "taskOutputParameter": {
+                  "outputParameterKey": "Output",
+                  "producerTask": "evaluate-model"
+                }
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "decide"
+          }
+        },
+        "deploy-model": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-deploy-model"
+          },
+          "dependentTasks": [
+            "decide",
+            "train-model"
+          ],
+          "inputs": {
+            "artifacts": {
+              "model": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "model",
+                  "producerTask": "train-model"
+                }
+              }
+            },
+            "parameters": {
+              "decision": {
+                "taskOutputParameter": {
+                  "outputParameterKey": "Output",
+                  "producerTask": "decide"
+                }
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "deploy-model"
+          }
+        },
+        "evaluate-model": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-evaluate-model"
+          },
+          "dependentTasks": [
+            "load-data",
+            "train-model"
+          ],
+          "inputs": {
+            "artifacts": {
+              "dataset": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "dataset",
+                  "producerTask": "load-data"
+                }
+              },
+              "model": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "model",
+                  "producerTask": "train-model"
+                }
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "evaluate-model"
+          }
+        },
+        "load-data": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-load-data"
+          },
+          "taskInfo": {
+            "name": "load-data"
+          }
+        },
+        "train-model": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-train-model"
+          },
+          "dependentTasks": [
+            "load-data"
+          ],
+          "inputs": {
+            "artifacts": {
+              "dataset": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "dataset",
+                  "producerTask": "load-data"
+                }
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "train-model"
+          }
+        }
+      }
+    }
+  },
+  "schemaVersion": "2.1.0",
+  "sdkVersion": "kfp-2.16.0"
+}
